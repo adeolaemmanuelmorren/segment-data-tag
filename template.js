@@ -12,11 +12,14 @@ const sendPixel = require('sendPixel');
 const encodeUriComponent = require('encodeUriComponent');
 const toBase64 = require('toBase64');
 const makeString = require('makeString');
-const setCookie = require('setCookie');
-const getCookieValues = require('getCookieValues');
+//const setCookie = require('setCookie');
+//const getCookieValues = require('getCookieValues');
 const getContainerVersion = require('getContainerVersion');
 const isConsentGranted = require('isConsentGranted');
-
+const getQueryParameters = require('getQueryParameters');
+const makeTableMap = require('makeTableMap');
+const Object = require('Object');
+const log = require('logToConsole');
 let pageLocation = getUrl();
 
 if (
@@ -27,43 +30,225 @@ if (
 
   return;
 }
-const userAndCustomData = getUserAndCustomDataArray();
-let requestType = determinateRequestType();
 
-if (requestType === 'post') {
-  const dataTagScriptUrl =
-    data.load_data_tag_script_url || 'https://cdn.stape.io/dtag/v7.js';
-  injectScript(
-    dataTagScriptUrl,
-    sendPostRequest,
-    data.gtmOnFailure,
-    dataTagScriptUrl
-  );
+//handleClientSideSegment();
+// TODO:
+// do proepry field trimming for the input properties for track, page, identify and group according to how stape does it
+if (data.sendToServerContainer) {
+  handleServerSideSegment();
 } else {
-  sendGetRequest();
+  data.gtmOnSuccess();
 }
 
+function handleServerSideSegment() {
+  const requestType = determinateRequestType();
+
+  if (requestType === 'post') {
+    const dataTagScriptUrl =
+      data.loadDataTagScriptUrl || 'https://cdn.stape.io/dtag/v7.js';
+    log('** injecting script and invoking send post request');
+    injectScript(
+      dataTagScriptUrl,
+      sendPostRequest,
+      data.gtmOnFailure,
+      dataTagScriptUrl
+    );
+  } else {
+    sendGetRequest();
+  }
+}
+
+function handlePageCallServerSide(clientSideSegmentObject) {
+  const finalPageProperties = getFinalProperties(
+    data.pagePropertiesKeyValues,
+    data.pagePropertiesObject
+  );
+
+  if (data.pageCategory) {
+    clientSideSegmentObject.category = data.pageCategory;
+  }
+  if (data.pageName) {
+    clientSideSegmentObject.name = data.pageName;
+  }
+
+  clientSideSegmentObject.properties = finalPageProperties;
+}
+
+function handleIdentifyCallServerSide(clientSideSegmentObject) {
+  clientSideSegmentObject.traits = getFinalProperties(
+    data.userTraitsKeyValues,
+    data.userTraitsObject
+  );
+}
+
+function handleTrackCallServerSide(clientSideSegmentObject) {
+  const finalEventProperties = getFinalProperties(
+    data.eventPropertiesKeyValues,
+    data.eventPropertiesObject
+  );
+  clientSideSegmentObject.event = data.eventName;
+  clientSideSegmentObject.properties = finalEventProperties;
+}
+
+function handleGroupCallServerSide(clientSideSegmentObject) {
+  const finalGroupTraits = getFinalProperties(
+    data.groupTraitsKeyValues,
+    data.groupTraitsObject
+  );
+  clientSideSegmentObject.groupId = data.groupId;
+  clientSideSegmentObject.traits = finalGroupTraits;
+}
+
+function generateClientSideEventBodyForServer() {
+  const clientSideSegmentObject = {
+    anonymousId: getAnonymousId(),
+    context: {
+      campaign: generateCampaignForServer(),
+      // locale:
+      page: generatePageDataForServer(),
+      screen: generateScreenDataForServer(),
+    },
+
+    userId: getUserId(),
+  };
+
+  if (data.callType === 'identify') {
+    clientSideSegmentObject.context.traits = getFinalProperties(
+      data.userTraitsKeyValues,
+      data.userTraitsObject
+    );
+  }
+
+  if (data.overrideMessageId) {
+    clientSideSegmentObject.messageId = data.overrideMessageId;
+  }
+
+  const contextProperties = getFinalProperties(
+    data.contextPropertiesKeyValues,
+    data.contextPropertiesObject
+  );
+  if (Object.keys(contextProperties).length > 0) {
+    clientSideSegmentObject.context = mergeObjects(
+      {},
+      clientSideSegmentObject.context,
+      contextProperties
+    );
+  }
+
+  const integrations = getFinalProperties(
+    data.integrationsKeyValues,
+    data.integrationsObject
+  );
+  if (Object.keys(integrations).length > 0) {
+    clientSideSegmentObject.integrations = integrations;
+  }
+
+  switch (data.callType) {
+    case 'track':
+      handleTrackCallServerSide(clientSideSegmentObject);
+      break;
+    case 'page':
+      handlePageCallServerSide(clientSideSegmentObject);
+      break;
+    case 'group':
+      handleGroupCallServerSide(clientSideSegmentObject);
+      break;
+    case 'identify':
+      handleIdentifyCallServerSide(clientSideSegmentObject);
+      break;
+    default:
+      break;
+  }
+
+  return clientSideSegmentObject;
+}
+
+function generatePageDataForServer() {
+  return {
+    path: getUrl('path'),
+    referrer: getReferrerUrl(),
+    search: getUrl('query'),
+    title: readTitle(),
+    url: getUrl(),
+  };
+}
+
+function generateCampaignForServer() {
+  let utmParams = [
+    'utm_source',
+    'utm_medium',
+    'utm_campaign',
+    'utm_term',
+    'utm_content',
+  ];
+  let campaign = {};
+
+  utmParams.forEach((param) => {
+    let value = getQueryParameters(param);
+    if (value) {
+      campaign[param.split('utm_')[1]] = value;
+    }
+  });
+
+  return campaign;
+}
+
+function generateScreenDataForServer() {
+  const dataTagData = callInWindow(
+    'dataTagGetData',
+    getContainerVersion()['containerId']
+  );
+
+  return {
+    screen_resolution:
+      dataTagData.screen.width + 'x' + dataTagData.screen.height,
+    viewport_size: dataTagData.innerWidth + 'x' + dataTagData.innerHeight,
+  };
+}
+function getUserId() {
+  return data.userId
+    ? data.userId
+    : localStorage.getItem('ajs_user_id') || null;
+}
+
+function getAnonymousId() {
+  return data.anonymousId
+    ? data.anonymousId
+    : localStorage.getItem('ajs_anonymous_id') || null;
+}
+
+// this gets called first
 function sendPostRequest() {
-  let eventData = {};
+  log('*** inside postreqyest');
+  let eventData = generateClientSideEventBodyForServer();
+  log('eventdata', eventData);
+  if (data.addConsentState) {
+    eventData = addConsentStateData(eventData);
+  }
 
-  eventData = addCommonDataForPostRequest(data, eventData);
-  eventData = addRequiredDataForPostRequest(data, eventData);
-  eventData = addGaRequiredData(data, eventData);
+  log(
+    '*** server side urk inovcation url',
+    data.gtmServerRequestPath +
+      '?v=' +
+      makeNumber(data.gtmServerProtocolVersion) +
+      '&segment_event_type=' +
+      encodeUriComponent(data.callType)
+  );
 
+  log('*** calling dataTagSendData');
   callInWindow(
     'dataTagSendData',
     eventData,
-    data.gtm_server_domain,
-    data.request_path +
+    data.gtmServerDomain,
+    data.gtmServerRequestPath +
       '?v=' +
-      eventData.v +
-      '&event_name=' +
-      encodeUriComponent(eventData.event_name) +
-      (data.richsstsse ? '&richsstsse' : ''),
-    data.dataLayerEventName,
-    data.dataLayerVariableName,
-    data.waitForCookies,
-    data.useFetchInsteadOfXHR
+      makeNumber(data.gtmServerProtocolVersion) +
+      '&segment_event_type=' +
+      encodeUriComponent(data.callType),
+    false, // dataLayerEventName
+    false, //dataLayerVariableName
+    false, // wait for cookies
+    true // use fetch
   );
 
   data.gtmOnSuccess();
@@ -71,87 +256,214 @@ function sendPostRequest() {
 
 function sendGetRequest() {
   sendPixel(
-    addDataForGetRequest(data, buildEndpoint()),
+    addDataForGetRequest(buildEndpoint()),
     data.gtmOnSuccess,
     data.gtmOnFailure
   );
 }
 
 function buildEndpoint() {
-  return data.gtm_server_domain + data.request_path;
+  return data.gtmServerDomain + data.gtmServerRequestPath;
 }
 
-function addRequiredDataForPostRequest(data, eventData) {
-  eventData.event_name = getEventName(data);
-  eventData.v = makeNumber(data.protocol_version);
-
-  let customData = getCustomData(data, true);
-
-  for (let key in customData) {
-    eventData[customData[key].name] = customData[key].value;
-  }
-
-  return eventData;
-}
-
-function addGaRequiredData(data, eventData) {
-  if (data.addGaParameters && data.gaId) {
-    eventData['x-ga-measurement_id'] = data.gaId;
-    eventData['x-ga-page_id'] = copyFromDataLayer('gtm.start');
-    eventData['x-ga-mp2-richsstsse'] = '';
-    eventData['x-ga-mp2-seg'] = 1;
-    eventData['x-ga-request_count'] = 1;
-    eventData['x-ga-protocol_version'] = 2;
-    eventData.v = 2;
-  }
-
-  return eventData;
-}
-
-function addDataForGetRequest(data, url) {
-  let eventData = {};
+function addDataForGetRequest(url) {
+  let eventData = generateClientSideEventBodyForServer();
   url +=
     '?v=' +
-    data.protocol_version +
-    '&event_name=' +
-    encodeUriComponent(getEventName(data));
+    data.gtmServerProtocolVersion +
+    '&segment_event_type=' +
+    encodeUriComponent(data.callType);
 
-  if (data.add_common) {
-    eventData = addCommonData(data, eventData);
-  }
-
-  if (data.add_consent_state) {
+  if (data.addConsentState) {
     eventData = addConsentStateData(eventData);
   }
 
-  let customData = getCustomData(data, false);
+  // if (data.request_type === 'auto') {
+  return (
+    url + '&dtdc=' + encodeUriComponent(toBase64(JSON.stringify(eventData)))
+  );
+  // }
 
-  if (customData.length) {
-    for (let customDataKey in customData) {
-      eventData[customData[customDataKey].name] =
-        customData[customDataKey].value;
-    }
-  }
+  // for (let eventDataKey in eventData) {
+  //   url +=
+  //     '&' +
+  //     eventDataKey +
+  //     '=' +
+  //     (eventData[eventDataKey]
+  //       ? encodeUriComponent(eventData[eventDataKey])
+  //       : '');
+  // }
 
-  if (data.request_type === 'auto') {
-    return (
-      url + '&dtdc=' + encodeUriComponent(toBase64(JSON.stringify(eventData)))
-    );
-  }
-
-  for (let eventDataKey in eventData) {
-    url +=
-      '&' +
-      eventDataKey +
-      '=' +
-      (eventData[eventDataKey]
-        ? encodeUriComponent(eventData[eventDataKey])
-        : '');
-  }
-
-  return url;
+  // return url;
 }
 
+// this function generates page data;
+// used to be addCommonData()
+
+function addConsentStateData(eventData) {
+  const consentState = {
+    ad_storage: isConsentGranted('ad_storage'),
+    analytics_storage: isConsentGranted('analytics_storage'),
+    functionality_storage: isConsentGranted('functionality_storage'),
+    personalization_storage: isConsentGranted('personalization_storage'),
+    security_storage: isConsentGranted('security_storage'),
+  };
+  eventData.consentState = consentState;
+  return eventData;
+}
+
+function determinateRequestType() {
+  // const isHashingEnabled = userAndCustomData.some(
+  //   (item) =>
+  //     item.transformation === 'md5' ||
+  //     item.transformation === 'sha256base64' ||
+  //     item.transformation === 'sha256hex'
+  // );
+
+  // if (isHashingEnabled) return 'post';
+
+  // if (data.add_data_layer) {
+  //   return 'post';
+  // }
+
+  // const userAndCustomDataLength = makeNumber(
+  //   JSON.stringify(userAndCustomData).length
+  // );
+  // return userAndCustomDataLength > 1500 ? 'post' : 'get';
+
+  return 'post';
+}
+
+// not in use
+
+function handleClientSideSegment() {
+  const options = {};
+  const userTraits = getFinalProperties(
+    data.userTraitsKeyValues,
+    data.userTraitsObject
+  );
+
+  const contextProperties = getFinalProperties(
+    data.contextPropertiesKeyValues,
+    data.contextPropertiesObject
+  );
+  if (Object.keys(contextProperties).length > 0) {
+    options.context = contextProperties;
+  }
+
+  if (data.userId) {
+    options.userId = data.userId;
+  }
+
+  if (data.anonymousId) {
+    options.anonymousId = data.anonymousId;
+  }
+
+  if (data.overrideMessageId) {
+    options.messageId = data.overrideMessageId;
+  }
+
+  if (
+    data.callType !== 'identify' &&
+    typeof data.userTraits === 'object' &&
+    Object.keys(data.userTraits).length > 0
+  ) {
+    options.traits = userTraits;
+  }
+
+  // add integrations here
+  const integrations = getFinalProperties(
+    data.integrationsKeyValues,
+    data.integrationsPropertiesObject
+  );
+  if (Object.keys(integrations).length > 0) {
+    options.integrations = integrations;
+  }
+  switch (data.callType) {
+    case 'track':
+      handleTrackCall(options);
+      break;
+    case 'page':
+      handlePageCall(options);
+      break;
+    case 'group':
+      handleGroupCall(options);
+      break;
+    case 'identify':
+      handleIdentifyCall(options, userTraits);
+      break;
+    default:
+      break;
+  }
+}
+
+function handleIdentifyCall(options, userTraits) {
+  callInWindow('analytics.identify', data.userId, userTraits, options);
+}
+
+function handleTrackCall(options) {
+  const finalEventProperties = getFinalProperties(
+    data.eventPropertiesKeyValues,
+    data.eventPropertiesObject
+  );
+  callInWindow(
+    'analytics.track',
+    data.eventName,
+    finalEventProperties,
+    options
+  );
+}
+
+function handlePageCall(options) {
+  const finalPageProperties = getFinalProperties(
+    data.pagePropertiesKeyValues,
+    data.pagePropertiesObject
+  );
+  callInWindow(
+    'analytics.page',
+    data.pageCategory,
+    data.pageName,
+    finalPageProperties,
+    options
+  );
+}
+
+function handleGroupCall(options) {
+  const finalGroupTraits = getFinalProperties(
+    data.groupTraitsKeyValues,
+    data.groupTraitsObject
+  );
+  callInWindow('analytics.group', data.groupId, finalGroupTraits, options);
+}
+
+function getFinalProperties(propertiesKeyValues, propertiesObject) {
+  const validatedPropertiesObject =
+    typeof propertiesObject === 'object' && propertiesObject !== null
+      ? propertiesObject
+      : {};
+  const propertiesFromKeyValues =
+    propertiesKeyValues && Object.keys(propertiesKeyValues).length !== 0
+      ? makeTableMap(propertiesKeyValues, 'propertyName', 'propertyValue')
+      : {};
+  return mergeObjects({}, validatedPropertiesObject, propertiesFromKeyValues);
+}
+
+function mergeObjects() {
+  let obj = {},
+    i = 0,
+    il = arguments.length,
+    key;
+  for (; i < il; i++) {
+    for (key in arguments[i]) {
+      if (arguments[i].hasOwnProperty(key) && key.trim() !== '') {
+        obj[key] = arguments[i][key];
+      }
+    }
+  }
+  return obj;
+}
+
+/*
 function addCommonDataForPostRequest(data, eventData) {
   if (data.add_common || data.add_data_layer) {
     const dataTagData = callInWindow(
@@ -180,40 +492,6 @@ function addCommonDataForPostRequest(data, eventData) {
   return eventData;
 }
 
-function addCommonData(data, eventData) {
-  eventData.page_location = getUrl();
-  eventData.page_hostname = getUrl('host');
-  eventData.page_referrer = getReferrerUrl();
-  eventData.page_title = readTitle();
-  eventData.page_encoding = readCharacterSet();
-
-  return eventData;
-}
-
-function addConsentStateData(eventData) {
-  eventData.consent_state = {
-    ad_storage: isConsentGranted('ad_storage'),
-    analytics_storage: isConsentGranted('analytics_storage'),
-    functionality_storage: isConsentGranted('functionality_storage'),
-    personalization_storage: isConsentGranted('personalization_storage'),
-    security_storage: isConsentGranted('security_storage'),
-  };
-  return eventData;
-}
-
-function getEventName(data) {
-  const eventName = 'page_view';
-
-  if (data.event_type === 'standard') {
-    return data.event_name_standard ? data.event_name_standard : eventName;
-  }
-
-  if (data.event_type === 'custom') {
-    return data.event_name_custom ? data.event_name_custom : eventName;
-  }
-
-  return eventName;
-}
 
 function getCustomData(data, dtagLoaded) {
   let dataToStore = [];
@@ -281,74 +559,6 @@ function getCustomData(data, dtagLoaded) {
   return customData;
 }
 
-function storeData(dataToStore) {
-  let dataToStoreCookieResult = {};
-  let dataToStoreLocalStorageResult = {};
-  let dataToStoreCookie = getCookieValues('stape')[0];
-
-  if (dataToStoreCookie) {
-    dataToStoreCookie = JSON.parse(dataToStoreCookie);
-
-    if (dataToStoreCookie) {
-      for (let attrName in dataToStoreCookie) {
-        if (dataToStoreCookie[attrName])
-          dataToStoreCookieResult[attrName] = dataToStoreCookie[attrName];
-      }
-    }
-  }
-
-  if (localStorage) {
-    let dataToStoreLocalStorage = localStorage.getItem('stape');
-
-    if (dataToStoreLocalStorage) {
-      dataToStoreLocalStorage = JSON.parse(dataToStoreLocalStorage);
-
-      if (dataToStoreLocalStorage) {
-        for (let attrName in dataToStoreLocalStorage) {
-          if (dataToStoreLocalStorage[attrName])
-            dataToStoreLocalStorageResult[attrName] =
-              dataToStoreLocalStorage[attrName];
-        }
-      }
-    }
-  }
-
-  for (let attrName in dataToStore) {
-    if (dataToStore[attrName].value) {
-      if (
-        dataToStore[attrName].store === 'all' ||
-        dataToStore[attrName].store === 'localStorage'
-      ) {
-        dataToStoreLocalStorageResult[dataToStore[attrName].name] =
-          dataToStore[attrName].value;
-      }
-
-      if (
-        dataToStore[attrName].store === 'all' ||
-        dataToStore[attrName].store === 'cookies'
-      ) {
-        dataToStoreCookieResult[dataToStore[attrName].name] =
-          dataToStore[attrName].value;
-      }
-    }
-  }
-
-  if (localStorage && getObjectLength(dataToStoreLocalStorageResult) !== 0) {
-    localStorage.setItem(
-      'stape',
-      JSON.stringify(dataToStoreLocalStorageResult)
-    );
-  }
-
-  if (getObjectLength(dataToStoreCookieResult) !== 0) {
-    setCookie('stape', JSON.stringify(dataToStoreCookieResult), {
-      secure: true,
-      domain: 'auto',
-      path: '/',
-    });
-  }
-}
-
 function getObjectLength(object) {
   let length = 0;
 
@@ -358,38 +568,6 @@ function getObjectLength(object) {
     }
   }
   return length;
-}
-
-function determinateRequestType() {
-  if (data.request_type !== 'auto') {
-    return data.request_type;
-  }
-
-  if (data.add_data_layer) {
-    return 'post';
-  }
-
-  if (data.dataLayerEventPush) {
-    return 'post';
-  }
-
-  if (data.richsstsse) {
-    return 'post';
-  }
-
-  const isHashingEnabled = userAndCustomData.some(
-    (item) =>
-      item.transformation === 'md5' ||
-      item.transformation === 'sha256base64' ||
-      item.transformation === 'sha256hex'
-  );
-
-  if (isHashingEnabled) return 'post';
-
-  const userAndCustomDataLength = makeNumber(
-    JSON.stringify(userAndCustomData).length
-  );
-  return userAndCustomDataLength > 1500 ? 'post' : 'get';
 }
 
 function getUserAndCustomDataArray() {
@@ -406,3 +584,4 @@ function getUserAndCustomDataArray() {
   }
   return userAndCustomDataArray;
 }
+*/
