@@ -34,19 +34,25 @@ if (
 //handleClientSideSegment();
 // TODO:
 // do proepry field trimming for the input properties for track, page, identify and group according to how stape does it
-if (data.sendToServerContainer) {
+log('hello');
+if (data.sendToServerSide) {
+  log('sending server side');
   handleServerSideSegment();
 } else {
   data.gtmOnSuccess();
 }
 
 function handleServerSideSegment() {
+  log('inside server');
   const requestType = determinateRequestType();
+  log('requestType');
+  log(requestType);
 
   if (requestType === 'post') {
     const dataTagScriptUrl =
       data.loadDataTagScriptUrl || 'https://cdn.stape.io/dtag/v7.js';
     log('** injecting script and invoking send post request');
+
     injectScript(
       dataTagScriptUrl,
       sendPostRequest,
@@ -100,6 +106,7 @@ function handleGroupCallServerSide(clientSideSegmentObject) {
 }
 
 function generateClientSideEventBodyForServer() {
+  log('**inside generateClientSideEventBodyForServer**');
   const clientSideSegmentObject = {
     anonymousId: getAnonymousId(),
     context: {
@@ -111,6 +118,9 @@ function generateClientSideEventBodyForServer() {
 
     userId: getUserId(),
   };
+
+  log('**clientSideSegmentObject**');
+  log(clientSideSegmentObject);
 
   if (data.callType === 'identify') {
     clientSideSegmentObject.context.traits = getFinalProperties(
@@ -164,6 +174,9 @@ function generateClientSideEventBodyForServer() {
 }
 
 function generatePageDataForServer() {
+  log('* inside generatePageDataForServer');
+  log('**getUrl**');
+  log(getUrl());
   return {
     path: getUrl('path'),
     referrer: getReferrerUrl(),
@@ -174,6 +187,7 @@ function generatePageDataForServer() {
 }
 
 function generateCampaignForServer() {
+  log('* inside generateCampaignForServer');
   let utmParams = [
     'utm_source',
     'utm_medium',
@@ -189,16 +203,20 @@ function generateCampaignForServer() {
       campaign[param.split('utm_')[1]] = value;
     }
   });
+  log('**campaign**');
+  log(campaign);
 
   return campaign;
 }
 
 function generateScreenDataForServer() {
+  log('* inside generateScreenDataForServer');
   const dataTagData = callInWindow(
     'dataTagGetData',
     getContainerVersion()['containerId']
   );
 
+  log('** data tag get tdata success**');
   return {
     screen_resolution:
       dataTagData.screen.width + 'x' + dataTagData.screen.height,
@@ -212,6 +230,9 @@ function getUserId() {
 }
 
 function getAnonymousId() {
+  log('**getAnonymousId**');
+  log(data.anonymousId);
+  return 'hey';
   return data.anonymousId
     ? data.anonymousId
     : localStorage.getItem('ajs_anonymous_id') || null;

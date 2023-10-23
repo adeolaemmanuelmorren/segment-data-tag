@@ -275,6 +275,7 @@ function dataTagSendData(
 }
 
 function dataTagGetData(containerId) {
+  console.log('*** insided dataTagGetData', containerId);
   window.dataTagData = {
     document: {
       characterSet: window.document.characterSet,
