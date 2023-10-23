@@ -275,6 +275,7 @@ function dataTagSendData(
 }
 
 function dataTagGetData(containerId) {
+  debugger;
   console.log('*** insided dataTagGetData', containerId);
   window.dataTagData = {
     document: {
